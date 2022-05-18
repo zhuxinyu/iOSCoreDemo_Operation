@@ -89,6 +89,8 @@ extension OCToken: Equatable {
             return left == right
         case let (.operation(left), .operation(right)):
             return left == right
+        case let (.paren(left), .paren(right)):
+            return left == right
         case (.eof, .eof):
             return true
         case (.whiteSpaceAndNewLine, .whiteSpaceAndNewLine):
@@ -278,7 +280,7 @@ class ViewController: UIViewController {
         super.viewDidLoad()
         // Do any additional setup after loading the view.
         
-        let result = OCInterpreter.init("31 * 4 + 3").expr()
+        let result = OCInterpreter.init("31 * ( ( 4 + 3 ) + 5 )").expr()
         print(result)
     }
 }
