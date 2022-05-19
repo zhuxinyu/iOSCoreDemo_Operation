@@ -15,7 +15,7 @@ public enum OCConstant {
     case string(String)
 }
 
-public enum OCOperation {
+public enum OCBinOpType {
     case plus
     case minus
     case mult
@@ -29,11 +29,18 @@ public enum OCDirection {
 
 public enum OCToken {
     case constant(OCConstant)
-    case operation(OCOperation)
+    case operation(OCBinOpType)
     case paren(OCDirection)
     case eof
     case whiteSpaceAndNewLine
 }
+
+public enum OCNumber: OCAST {
+    case integer(Int)
+    case float(Float)
+}
+
+public protocol OCAST {}
 
 extension OCConstant: Equatable {
     public static func == (lhs: OCConstant, rhs: OCConstant) -> Bool {
@@ -52,8 +59,8 @@ extension OCConstant: Equatable {
     }
 }
 
-extension OCOperation: Equatable {
-    public static func == (lhs: OCOperation, rhs: OCOperation) -> Bool {
+extension OCBinOpType: Equatable {
+    public static func == (lhs: OCBinOpType, rhs: OCBinOpType) -> Bool {
         switch (lhs, rhs) {
         case (.plus, .plus):
             return true
@@ -208,50 +215,53 @@ public class OCInterpreter {
         currentTK = lexer.nextTK()
     }
     
-    public func expr() -> Int {
-        var result = term()
+    public func expr() -> OCAST {
+        print("expr \(currentTK)")
+        var node = term()
         
         while [.operation(.plus), .operation(.minus)].contains(currentTK) {
             let tk = currentTK
             eat(currentTK)
             if tk == .operation(.plus) {
-                result = result + factor()
+                node = OCBindOp(left: node, operation: .plus, right: factor())
             } else if tk ==  .operation(.minus) {
-                result = result - factor()
+                node = OCBindOp(left: node, operation: .minus, right: factor())
             }
         }
-        return result
+        return node
     }
     
     // 语法解析中对数字的处理
-    private func term() -> Int {
-        var result = factor()
+    private func term() -> OCAST {
+        print("term \(currentTK)")
+        var node = factor()
         
         while [.operation(.mult), .operation(.intDiv)].contains(currentTK) {
             let tk = currentTK
             eat(currentTK)
             if tk == .operation(.mult) {
-                result = result * factor()
+                node = OCBindOp(left: node, operation: .mult, right: factor())
             } else if tk == .operation(.intDiv) {
-                result = result / factor()
+                node = OCBindOp(left: node, operation: .intDiv, right: factor())
             }
         }
-        return result
+        return node
     }
         
-    private func factor() -> Int {
+    private func factor() -> OCAST {
+        print("factor \(currentTK)")
         let tk = currentTK
         switch tk {
         case let .constant(.integer(result)):
             eat(.constant(.integer(result)))
-            return result
+            return OCNumber.integer(result)
         case .paren(.left):
             eat(.paren(.left))
             let result = expr()
             eat(.paren(.right))
             return result
         default:
-            return 0
+            return OCNumber.integer(0)
         }
     }
     
@@ -274,13 +284,25 @@ public class OCInterpreter {
     
 }
 
+class OCBindOp: OCAST {
+    let left: OCAST
+    let operation: OCBinOpType
+    let right: OCAST
+    
+    init(left: OCAST, operation: OCBinOpType, right: OCAST) {
+        self.left = left
+        self.operation = operation
+        self.right = right
+    }
+}
+
 class ViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
         // Do any additional setup after loading the view.
         
-        let result = OCInterpreter.init("31 * ( ( 4 + 3 ) + 5 )").expr()
+        let result = OCInterpreter.init("4 + ( 3 * 2 )").expr()
         print(result)
     }
 }
