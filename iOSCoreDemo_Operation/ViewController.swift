@@ -40,6 +40,11 @@ public enum OCNumber: OCAST {
     case float(Float)
 }
 
+public enum OCUnaryOperationType {
+    case plus
+    case minus
+}
+
 public enum OCValue {
     case number(OCNumber)
     case none
@@ -166,6 +171,24 @@ extension OCNumber {
             return .float(left / Float(right))
         }
     }
+    
+    static prefix func + (left: OCNumber) -> OCNumber {
+        switch left {
+        case let .integer(value):
+            return .integer(+value)
+        case let .float(value):
+            return .float(+value)
+        }
+    }
+    
+    static prefix func - (left: OCNumber) -> OCNumber {
+        switch left {
+        case let .integer(value):
+            return .integer(-value)
+        case let .float(value):
+            return .float(-value)
+        }
+    }
 }
 
 public class OCLexer {
@@ -233,6 +256,11 @@ public class OCLexer {
     // 数字处理
     private func number() -> OCToken {
         var numStr = ""
+        if let character = currentCharacter, character == "-" {
+            numStr += "-"
+            advance()
+        }
+        
         while let character = currentCharacter, CharacterSet.decimalDigits.contains(character.unicodeScalars.first!) {
             numStr += String(character)
             advance()
@@ -328,6 +356,12 @@ public class OCInterpreter {
         case let .constant(.float(result)):
             eat(.constant(.float(result)))
             return OCNumber.float(result)
+        case .operation(.plus):
+            eat(.operation(.plus))
+            return OCUnaryOperation(operation: .plus, operand: factor())
+        case .operation(.minus):
+            eat(.operation(.minus))
+            return OCUnaryOperation(operation: .minus, operand: factor())
         case .paren(.left):
             eat(.paren(.left))
             let result = expr()
@@ -363,6 +397,8 @@ public class OCInterpreter {
             return eval(number: number)
         case let binOp as OCBindOp:
             return eval(binOp: binOp)
+        case let unaryOperation as OCUnaryOperation:
+            return eval(unaryOperation: unaryOperation)
         default:
             return .none
         }
@@ -388,6 +424,19 @@ public class OCInterpreter {
             return .number(leftResult / rightResult)
         }
     }
+    
+    func eval(unaryOperation: OCUnaryOperation) -> OCValue {
+        guard case let .number(result) = eval(node: unaryOperation.operand) else {
+            fatalError("Error: eval unaryOperation")
+        }
+        
+        switch unaryOperation.operation {
+        case .plus:
+            return .number(+result)
+        case .minus:
+            return .number(-result)
+        }
+    }
 }
 
 class OCBindOp: OCAST {
@@ -402,13 +451,23 @@ class OCBindOp: OCAST {
     }
 }
 
+class OCUnaryOperation: OCAST {
+    let operation: OCUnaryOperationType
+    let operand: OCAST
+    
+    init(operation: OCUnaryOperationType, operand: OCAST) {
+        self.operation = operation
+        self.operand = operand
+    }
+}
+
 class ViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
         // Do any additional setup after loading the view.
         
-        let interpreter = OCInterpreter.init("4 + ( 3.2 * 2 )")
+        let interpreter = OCInterpreter.init("4 + ( - ( 3.2 * 2 ) )")
         let ast = interpreter.expr()
         let result =  interpreter.eval(node: ast)
         
