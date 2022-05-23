@@ -40,6 +40,11 @@ public enum OCNumber: OCAST {
     case float(Float)
 }
 
+public enum OCValue {
+    case number(OCNumber)
+    case none
+}
+
 public protocol OCAST {}
 
 extension OCConstant: Equatable {
@@ -104,6 +109,61 @@ extension OCToken: Equatable {
             return true
         default:
             return false
+        }
+    }
+}
+
+extension OCNumber {
+    // binOp
+    static func + (left: OCNumber, right: OCNumber) -> OCNumber {
+        switch (left, right) {
+        case let (.integer(left), .integer(right)):
+            return .integer(left + right)
+        case let (.float(left), .float(right)):
+            return .float(left + right)
+        case let (.integer(left), .float(right)):
+            return .float(Float(left) + right)
+        case let (.float(left), .integer(right)):
+            return .float(left + Float(right))
+        }
+    }
+    
+    static func - (left: OCNumber, right: OCNumber) -> OCNumber {
+        switch (left, right) {
+        case let (.integer(left), .integer(right)):
+            return .integer(left - right)
+        case let (.float(left), .float(right)):
+            return .float(left - right)
+        case let (.integer(left), .float(right)):
+            return .float(Float(left) - right)
+        case let (.float(left), .integer(right)):
+            return .float(left - Float(right))
+        }
+    }
+    
+    static func * (left: OCNumber, right: OCNumber) -> OCNumber {
+        switch (left, right) {
+        case let (.integer(left), .integer(right)):
+            return .integer(left * right)
+        case let (.float(left), .float(right)):
+            return .float(left * right)
+        case let (.integer(left), .float(right)):
+            return .float(Float(left) * right)
+        case let (.float(left), .integer(right)):
+            return .float(left * Float(right))
+        }
+    }
+    
+    static func / (left: OCNumber, right: OCNumber) -> OCNumber {
+        switch (left, right) {
+        case let (.integer(left), .integer(right)):
+            return .integer(left / right)
+        case let (.float(left), .float(right)):
+            return .float(left / right)
+        case let (.integer(left), .float(right)):
+            return .float(Float(left) / right)
+        case let (.float(left), .integer(right)):
+            return .float(left / Float(right))
         }
     }
 }
@@ -176,6 +236,16 @@ public class OCLexer {
         while let character = currentCharacter, CharacterSet.decimalDigits.contains(character.unicodeScalars.first!) {
             numStr += String(character)
             advance()
+        }
+        
+        if let charater = currentCharacter, charater == "." {
+            numStr += "."
+            advance()
+            while let character = currentCharacter, CharacterSet.decimalDigits.contains(character.unicodeScalars.first!) {
+                numStr += String(character)
+                advance()
+            }
+            return .constant(.float(Float(numStr)!))
         }
         return .constant(.integer(Int(numStr)!))
     }
@@ -255,6 +325,9 @@ public class OCInterpreter {
         case let .constant(.integer(result)):
             eat(.constant(.integer(result)))
             return OCNumber.integer(result)
+        case let .constant(.float(result)):
+            eat(.constant(.float(result)))
+            return OCNumber.float(result)
         case .paren(.left):
             eat(.paren(.left))
             let result = expr()
@@ -282,6 +355,39 @@ public class OCInterpreter {
         }
     }
     
+    // eval
+    
+    func eval(node: OCAST) -> OCValue {
+        switch node {
+        case let number as OCNumber:
+            return eval(number: number)
+        case let binOp as OCBindOp:
+            return eval(binOp: binOp)
+        default:
+            return .none
+        }
+    }
+    
+    func eval(number: OCNumber) -> OCValue {
+        return .number(number)
+    }
+    
+    func eval(binOp: OCBindOp) -> OCValue {
+        guard case let .number(leftResult) = eval(node: binOp.left), case let .number(rightResult) = eval(node: binOp.right) else {
+            fatalError("Error! binOp is wrong")
+        }
+        
+        switch binOp.operation {
+        case .plus:
+            return .number(leftResult + rightResult)
+        case .minus:
+            return .number(leftResult - rightResult)
+        case .mult:
+            return .number(leftResult * rightResult)
+        case .intDiv:
+            return .number(leftResult / rightResult)
+        }
+    }
 }
 
 class OCBindOp: OCAST {
@@ -302,7 +408,10 @@ class ViewController: UIViewController {
         super.viewDidLoad()
         // Do any additional setup after loading the view.
         
-        let result = OCInterpreter.init("4 + ( 3 * 2 )").expr()
+        let interpreter = OCInterpreter.init("4 + ( 3.2 * 2 )")
+        let ast = interpreter.expr()
+        let result =  interpreter.eval(node: ast)
+        
         print(result)
     }
 }
