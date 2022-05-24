@@ -8,6 +8,8 @@
 import UIKit
 import Foundation
 
+public protocol OCAST {}
+
 public enum OCConstant {
     case integer(Int)
     case float(Float)
@@ -27,12 +29,25 @@ public enum OCDirection {
     case right
 }
 
-public enum OCToken {
+public enum OCToken: OCAST {
     case constant(OCConstant)
     case operation(OCBinOpType)
     case paren(OCDirection)
     case eof
     case whiteSpaceAndNewLine
+    
+    case brace(OCDirection)
+    case asterisk
+    case interface
+    case implementation
+    case end
+    case id(String)
+    case semi
+    case assign
+    
+    case program
+    case method
+    case variable
 }
 
 public enum OCNumber: OCAST {
@@ -49,8 +64,6 @@ public enum OCValue {
     case number(OCNumber)
     case none
 }
-
-public protocol OCAST {}
 
 extension OCConstant: Equatable {
     public static func == (lhs: OCConstant, rhs: OCConstant) -> Bool {
@@ -112,6 +125,22 @@ extension OCToken: Equatable {
             return true
         case (.whiteSpaceAndNewLine, .whiteSpaceAndNewLine):
             return true
+        case let (.brace(left), .brace(right)):
+            return left == right
+        case (.asterisk, .asterisk):
+            return true
+        case (.end, .end):
+            return true
+        case (.implementation, .implementation):
+            return true
+        case let (.id(left), .id(right)):
+            return left == right
+        case (.semi, .semi):
+            return true
+        case (.assign, .assign):
+            return true
+//        case (.return, .return):
+//            return true
         default:
             return false
         }
@@ -220,6 +249,11 @@ public class OCLexer {
             return number()
         }
         
+        // identifier
+        if CharacterSet.alphanumerics.contains((currentCharacter?.unicodeScalars.first!)!) {
+            return id()
+        }
+        
         if currentCharacter == "+" {
             advance()
             return .operation(.plus)
@@ -249,8 +283,73 @@ public class OCLexer {
             advance()
             return .paren(.right)
         }
+        
+        if currentCharacter == "@" {
+            return at()
+        }
+        
+        if currentCharacter == ";" {
+            advance()
+            return .semi
+        }
+        
+        if currentCharacter == "=" {
+            advance()
+            return .assign
+        }
+        
+        if currentCharacter == "{" {
+            advance()
+            return .brace(.left)
+        }
+        
+        if currentCharacter == "}" {
+            advance()
+            return .brace(.right)
+        }
+        
+        if currentCharacter == "*" {
+            advance()
+            return .asterisk
+        }
         advance()
         return .eof
+    }
+    
+    // idenfiter and keywords
+    private func id() -> OCToken {
+        var idStr = ""
+        while let character = currentCharacter, CharacterSet.alphanumerics.contains(character.unicodeScalars.first!) {
+            idStr += String(character)
+            advance()
+        }
+        // keywords
+//        if let token = keywords[idStr] {
+//            return token
+//        }
+        
+        return .id(idStr)
+    }
+    
+    // @
+    private func at() -> OCToken {
+        advance()
+        var atStr = ""
+        while let character = currentCharacter, CharacterSet.alphanumerics.contains(character.unicodeScalars.first!) {
+            atStr += String(character)
+            advance()
+        }
+        if atStr == "interface" {
+            return .interface
+        }
+        if atStr == "end" {
+            return .end
+        }
+        if atStr == "implementation" {
+            return .implementation
+        }
+        
+        fatalError("Error: ast string not support")
     }
     
     // 数字处理
@@ -308,12 +407,18 @@ public class OCInterpreter {
     private var lexer: OCLexer
     private var currentTK: OCToken
     
+    public lazy var ast: OCAST = {
+       return expr()
+    }()
+    private var scopes: [String: OCValue]
+    
     public init(_ input: String) {
         lexer = OCLexer(input)
         currentTK = lexer.nextTK()
+        scopes = [String: OCValue]()
     }
     
-    public func expr() -> OCAST {
+    private func expr() -> OCAST {
         print("expr \(currentTK)")
         var node = term()
         
@@ -367,6 +472,18 @@ public class OCInterpreter {
             let result = expr()
             eat(.paren(.right))
             return result
+        case .program:
+            return program()
+        case .interface:
+            return interface()
+        case .implementation:
+            return implementation()
+        case .method:
+            return method()
+        case .variable:
+            return variable()
+        case .assign:
+            return assignStatement()
         default:
             return OCNumber.integer(0)
         }
@@ -437,6 +554,110 @@ public class OCInterpreter {
             return .number(-result)
         }
     }
+
+    func eval(assign: OCAssign) -> OCValue {
+        scopes[assign.left.name] = eval(node: assign.right)
+        return .none
+    }
+    
+    func eval(variable: OCVar) -> OCValue {
+        guard let value = scopes[variable.name] else {
+            fatalError("Error: eval var")
+        }
+        return value
+    }
+    
+    
+    // parser
+    
+    private func program() -> OCProgram {
+        return OCProgram(interface: interface(), implementation: implementation())
+    }
+    
+    private func interface() -> OCInterface {
+        eat(.interface)
+        guard case let .id(name) = currentTK else {
+            fatalError("Error interface")
+        }
+        eat(.id(name))
+        eat(.end)
+        return OCInterface(name: name)
+    }
+    
+    private func implementation() -> OCImplementation {
+        eat(.implementation)
+        guard case let .id(name) = currentTK else {
+            fatalError("Error implementation")
+        }
+        eat(.id(name))
+        let methodListNode =  methodList()
+        eat(.end)
+        return OCImplementation(name: name, methodList: methodListNode)
+    }
+    
+    private func methodList() -> [OCMethod] {
+        var methods = [OCMethod]()
+        while currentTK == .operation(.plus) || currentTK == .operation(.minus) {
+            eat(currentTK)
+            methods.append(method())
+        }
+        return methods
+    }
+    
+    private func method() -> OCMethod {
+        eat(.paren(.left))
+        guard case let .id(reStr) = currentTK else {
+            fatalError("Error reStr")
+        }
+        eat(.id(reStr))
+        eat(.paren(.right))
+        guard case let .id(methodName) = currentTK else {
+            fatalError("Error methodName")
+        }
+        eat(.id(methodName))
+        eat(.brace(.left))
+        let statementsNode = statements()
+        eat(.brace(.right))
+        return OCMethod(returnIdentifier: reStr, methodName: methodName, statements: statementsNode)
+     }
+    
+    private func statements() -> [OCAST] {
+        let sNode = statement()
+        var statements = [sNode]
+        while currentTK == .semi {
+            eat(.semi)
+            statements.append(statement())
+        }
+        return statements
+    }
+    
+    private func statement() -> OCAST {
+        switch currentTK {
+        case .id:
+            return assignStatement()
+        default:
+            return empty()
+        }
+    }
+    
+    private func assignStatement() -> OCAssign {
+        let left = variable()
+        eat(.assign)
+        let right = expr()
+        return OCAssign(left: left, right: right)
+    }
+    
+    private func variable() -> OCVar {
+        guard case let .id(name) = currentTK else {
+            fatalError("Error: var was wrong")
+        }
+        eat(.id(name))
+        return OCVar(name: name)
+    }
+    
+    private func empty() -> OCToken {
+        return .eof
+    }
 }
 
 class OCBindOp: OCAST {
@@ -461,6 +682,59 @@ class OCUnaryOperation: OCAST {
     }
 }
 
+class OCProgram: OCAST {
+    let interface: OCInterface
+    let implementation: OCImplementation
+    init(interface: OCInterface, implementation: OCImplementation) {
+        self.interface = interface
+        self.implementation = implementation
+    }
+}
+
+class OCInterface: OCAST {
+    let name: String
+    init(name: String) {
+        self.name = name
+    }
+}
+
+class OCImplementation: OCAST {
+    let name: String
+    let methodList: [OCMethod]
+    init(name: String, methodList: [OCMethod]) {
+        self.name = name
+        self.methodList = methodList
+    }
+}
+
+class OCMethod: OCAST {
+    let returnIdentifier: String
+    let methodName: String
+    let statements: [OCAST]
+    init(returnIdentifier: String, methodName: String, statements: [OCAST]) {
+        self.returnIdentifier = returnIdentifier
+        self.methodName = methodName
+        self.statements = statements
+    }
+}
+
+class OCAssign: OCAST {
+    let left: OCVar
+    let right: OCAST
+    
+    init(left: OCVar, right:OCAST) {
+        self.left = left
+        self.right = right
+    }
+}
+
+class OCVar: OCAST {
+    let name: String
+    init(name: String) {
+        self.name = name
+    }
+}
+
 class ViewController: UIViewController {
 
     override func viewDidLoad() {
@@ -468,7 +742,7 @@ class ViewController: UIViewController {
         // Do any additional setup after loading the view.
         
         let interpreter = OCInterpreter.init("4 + ( - ( 3.2 * 2 ) )")
-        let ast = interpreter.expr()
+        let ast = interpreter.ast
         let result =  interpreter.eval(node: ast)
         
         print(result)
