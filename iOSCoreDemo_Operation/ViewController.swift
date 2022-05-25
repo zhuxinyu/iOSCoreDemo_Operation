@@ -10,6 +10,27 @@ import Foundation
 
 public protocol OCAST {}
 
+protocol OCSymbol {
+    var name: String { get }
+}
+
+protocol OCVisitor: AnyObject {
+    func visit(node: OCAST)
+    func visit(program: OCProgram)
+    func visit(interface: OCInterface)
+    func visit(propertyDeclaration: OCPropertyDeclaration)
+    func visit(propertyAttribute: OCPropertyAttribute)
+    func visit(implementation: OCImplementation)
+    func visit(method: OCMethod)
+    func visit(assign: OCAssign)
+    func visit(variable: OCVar)
+    func visit(number: OCNumber)
+    func visit(unaryOperation: OCUnaryOperation)
+    func visit(binOp: OCBinOp)
+}
+
+public protocol OCDeclaration: OCAST {}
+
 public enum OCConstant {
     case integer(Int)
     case float(Float)
@@ -66,6 +87,48 @@ public enum OCUnaryOperationType {
 public enum OCValue {
     case number(OCNumber)
     case none
+}
+
+public enum OCBuiltInTypeSymbol: OCSymbol {
+    case integer
+    case float
+    case boolean
+    case string
+    
+    var name: String {
+        switch self {
+        case .integer:
+            return "NSUinteger"
+        case .float:
+             return "CGFloat"
+        case .boolean:
+            return "BOOL"
+        case .string:
+            return "NSString"
+        }
+    }
+}
+
+class OCVariableSymbol: OCSymbol {
+    let name: String
+    let type: OCSymbol
+    
+    init(name: String, type: OCSymbol) {
+        self.name = name
+        self.type = type
+    }
+}
+
+class OCVariableDeclaration: OCDeclaration {
+    let variable: OCVar
+    let type: String
+    let right: OCAST
+    
+    init(variable: OCVar, type: String, right: OCAST) {
+        self.variable = variable
+        self.type = type
+        self.right = right
+    }
 }
 
 extension OCConstant: Equatable {
@@ -473,9 +536,9 @@ public class OCInterpreter {
             let tk = currentTK
             eat(currentTK)
             if tk == .operation(.plus) {
-                node = OCBindOp(left: node, operation: .plus, right: factor())
+                node = OCBinOp(left: node, operation: .plus, right: factor())
             } else if tk ==  .operation(.minus) {
-                node = OCBindOp(left: node, operation: .minus, right: factor())
+                node = OCBinOp(left: node, operation: .minus, right: factor())
             }
         }
         return node
@@ -490,9 +553,9 @@ public class OCInterpreter {
             let tk = currentTK
             eat(currentTK)
             if tk == .operation(.mult) {
-                node = OCBindOp(left: node, operation: .mult, right: factor())
+                node = OCBinOp(left: node, operation: .mult, right: factor())
             } else if tk == .operation(.intDiv) {
-                node = OCBindOp(left: node, operation: .intDiv, right: factor())
+                node = OCBinOp(left: node, operation: .intDiv, right: factor())
             }
         }
         return node
@@ -559,7 +622,7 @@ public class OCInterpreter {
         switch node {
         case let number as OCNumber:
             return eval(number: number)
-        case let binOp as OCBindOp:
+        case let binOp as OCBinOp:
             return eval(binOp: binOp)
         case let unaryOperation as OCUnaryOperation:
             return eval(unaryOperation: unaryOperation)
@@ -572,7 +635,7 @@ public class OCInterpreter {
         return .number(number)
     }
     
-    func eval(binOp: OCBindOp) -> OCValue {
+    func eval(binOp: OCBinOp) -> OCValue {
         guard case let .number(leftResult) = eval(node: binOp.left), case let .number(rightResult) = eval(node: binOp.right) else {
             fatalError("Error! binOp is wrong")
         }
@@ -614,6 +677,10 @@ public class OCInterpreter {
         return value
     }
     
+    func eval(variableDeclaration: OCVariableDeclaration) -> OCValue {
+        scopes[variableDeclaration.variable.name] = eval(node: variableDeclaration.right)
+        return .none
+    }
     
     // parser
     
@@ -682,6 +749,20 @@ public class OCInterpreter {
     private func statement() -> OCAST {
         switch currentTK {
         case .id:
+            if case .id = lexer.nextTK() {
+                guard case let .id(name) = currentTK else {
+                    fatalError("Error： wrong")
+                }
+                eat(.id(name))
+                let v = variable()
+                if currentTK == .assign {
+                    eat(.assign)
+                    let right = expr()
+                    return OCVariableDeclaration(variable: v, type: name, right: right)
+                }else {
+                   fatalError("Error: wrong")
+                }
+            }
             return assignStatement()
         default:
             return empty()
@@ -747,10 +828,94 @@ public class OCInterpreter {
         eat(.id(name))
         return OCPropertyAttribute(name: name)
     }
-        
 }
 
-class OCBindOp: OCAST {
+public class OCStaticAnalyzer: OCVisitor {
+
+    private var currentScope: OCSymbolTable?
+    private var scopes: [String: OCSymbolTable] = [:]
+    
+    public init() {
+        
+    }
+    
+    public func analyze(node: OCAST) -> [String: OCSymbolTable] {
+        visit(node: node)
+        return scopes
+    }
+
+    // protocol
+    
+    func visit(node: OCAST) {
+        
+    }
+    
+    func visit(program: OCProgram) {
+        let globalScope = OCSymbolTable(name: "global", level: 1, enclosingScope: nil)
+        scopes[globalScope.name] = globalScope
+        currentScope = globalScope
+        visit(interface: program.interface)
+        visit(implementation: program.implementation)
+        currentScope = nil
+    }
+    
+    func visit(interface: OCInterface) {}
+    
+    func visit(propertyAttribute: OCPropertyAttribute) {}
+    
+    func visit(propertyDeclaration: OCPropertyDeclaration) {
+        guard let scope = currentScope else {
+            fatalError("Error: out of a scope")
+        }
+        guard scope.lookup(propertyDeclaration.name) == nil else {
+            fatalError("Error: duplicate identifier \(propertyDeclaration.name) found")
+        }
+        guard let symbolType = scope.lookup(propertyDeclaration.type) else {
+            fatalError("Error: \(propertyDeclaration.type) type not found")
+        }
+        scope.define(OCVariableSymbol(name: propertyDeclaration.name, type: symbolType))
+    }
+    
+    func visit(implementation: OCImplementation) {}
+    
+    func visit(method: OCMethod) {
+        let scope = OCSymbolTable(name: method.methodName, level: (currentScope?.level ?? 0), enclosingScope: currentScope)
+        scopes[scope.name] = scope
+        currentScope = scope
+        
+        for statement in method.statements {
+            visit(node: statement)
+        }
+        
+        currentScope = currentScope?.enclosingScope
+    }
+    
+    func visit(assign: OCAssign) {
+        guard let scope = currentScope else {
+            fatalError("Error: out of a scope")
+        }
+        guard scope.lookup(assign.left.name) != nil else {
+            fatalError("Error: \(assign.left.name) not found")
+        }
+    }
+    
+    func visit(variable: OCVar) {
+        guard let scope = currentScope else {
+            fatalError("Error: out of a scope")
+        }
+        guard scope.lookup(variable.name) != nil else {
+            fatalError("Error: \(variable.name) variable not found")
+        }
+    }
+    
+    func visit(number: OCNumber) {}
+    
+    func visit(unaryOperation: OCUnaryOperation) {}
+    
+    func visit(binOp: OCBinOp) {}
+}
+
+class OCBinOp: OCAST {
     let left: OCAST
     let operation: OCBinOpType
     let right: OCAST
@@ -845,6 +1010,44 @@ class OCVar: OCAST {
     }
 }
 
+public class OCSymbolTable {
+    var symbols: [String: OCSymbol] = [:]
+    
+    let name: String
+    let level: Int
+    let enclosingScope: OCSymbolTable?
+    
+    init(name: String, level: Int, enclosingScope: OCSymbolTable?) {
+        self.name = name
+        self.level = level
+        self.enclosingScope = enclosingScope
+        
+        defineBuiltInTypes()
+    }
+    
+    private func defineBuiltInTypes() {
+        define(OCBuiltInTypeSymbol.integer)
+        define(OCBuiltInTypeSymbol.float)
+        define(OCBuiltInTypeSymbol.boolean)
+        define(OCBuiltInTypeSymbol.string)
+    }
+    
+    func define(_ symbol: OCSymbol) {
+        symbols[symbol.name] = symbol
+    }
+    
+    // currentScopeOnly控制是否只在当前作用域符号表查找
+    func lookup(_ name: String, currentScopeOnly: Bool = false) -> OCSymbol? {
+        if let symbol = symbols[name] {
+            return symbol
+        }
+        if currentScopeOnly {
+            return nil
+        }
+        return enclosingScope?.lookup(name)
+    }
+}
+
 class ViewController: UIViewController {
 
     override func viewDidLoad() {
@@ -854,6 +1057,9 @@ class ViewController: UIViewController {
         let interpreter = OCInterpreter.init("4 + ( - ( 3.2 * 2 ) )")
         let ast = interpreter.ast
         let result =  interpreter.eval(node: ast)
+        
+        let sa = OCStaticAnalyzer()
+        let symtb = sa.analyze(node: ast)
         
         print(result)
     }
