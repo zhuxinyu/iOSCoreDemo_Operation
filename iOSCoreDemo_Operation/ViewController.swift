@@ -48,6 +48,9 @@ public enum OCToken: OCAST {
     case program
     case method
     case variable
+    case property
+    case comma
+    case comments(String)
 }
 
 public enum OCNumber: OCAST {
@@ -254,6 +257,23 @@ public class OCLexer {
             return id()
         }
         
+        // comments
+        if currentCharacter == "/" {
+            //处理可能注释的情况
+            if peek() == "/" {
+                advance()
+                advance()
+                return commentsFromDoubleSlash()
+            } else if peek() == "*" {
+                advance()
+                advance()
+                return commentsFromSlashAsterisk()
+            } else {
+                advance()
+                return .operation(.intDiv)
+            }
+        }
+        
         if currentCharacter == "+" {
             advance()
             return .operation(.plus)
@@ -395,10 +415,37 @@ public class OCLexer {
         return text[text.index(text.startIndex, offsetBy: peekIndex)]
     }
     
+    // 跳过空格和换行
     private func skipWhiteSpaceAndNewlines () {
         while let character = currentCharacter, CharacterSet.whitespacesAndNewlines.contains(character.unicodeScalars.first!) {
             advance()
         }
+    }
+    
+    // double slash
+    private func commentsFromDoubleSlash() -> OCToken {
+        var cStr = ""
+        while let character = currentCharacter, !CharacterSet.newlines.contains(character.unicodeScalars.first!) {
+            advance()
+            cStr += String(character)
+        }
+        return .comments(cStr)
+    }
+    
+    // slash aasterisk
+    private func commentsFromSlashAsterisk() -> OCToken {
+        var cStr = ""
+        while let character = currentCharacter {
+            if character == "*" && peek() == "/" {
+                advance()
+                advance()
+                break
+            } else {
+                advance()
+                cStr += String(character)
+            }
+        }
+        return .comments(cStr)
     }
 }
 
@@ -580,8 +627,9 @@ public class OCInterpreter {
             fatalError("Error interface")
         }
         eat(.id(name))
+        let pl = propertyList()
         eat(.end)
-        return OCInterface(name: name)
+        return OCInterface(name: name, propertyList: pl)
     }
     
     private func implementation() -> OCImplementation {
@@ -658,6 +706,48 @@ public class OCInterpreter {
     private func empty() -> OCToken {
         return .eof
     }
+    
+    // interface function
+    private func propertyList() -> [OCPropertyDeclaration] {
+        var properties = [OCPropertyDeclaration]()
+        while currentTK == .property {
+            eat(.property)
+            eat(.paren(.left))
+            let pa = propertyAttributes()
+            eat(.paren(.right))
+            guard case let .id(pType) = currentTK else {
+                fatalError("Error: property type wrong")
+            }
+            eat(.id(pType))
+            guard case let .id(name) = currentTK else {
+                fatalError("Error: property name wrong")
+            }
+            eat(.id(name))
+            let pd = OCPropertyDeclaration(propertyAttributesList: pa, type: pType, name: name)
+            properties.append(pd)
+            eat(.semi)
+        }
+        return properties
+    }
+    
+    private func propertyAttributes() -> [OCPropertyAttribute] {
+        let p = propertyAttribute()
+        var pa = [p]
+        while currentTK == .comma {
+            eat(.comma)
+            pa.append(propertyAttribute())
+        }
+        return pa
+    }
+    
+    private func propertyAttribute() -> OCPropertyAttribute {
+        guard case let .id(name) = currentTK else {
+            fatalError("Error: propertyAttribute wrong")
+        }
+        eat(.id(name))
+        return OCPropertyAttribute(name: name)
+    }
+        
 }
 
 class OCBindOp: OCAST {
@@ -692,6 +782,26 @@ class OCProgram: OCAST {
 }
 
 class OCInterface: OCAST {
+    let name: String
+    let propertyList: [OCPropertyDeclaration]
+    init(name: String, propertyList: [OCPropertyDeclaration]) {
+        self.name = name
+        self.propertyList = propertyList
+    }
+}
+
+class OCPropertyDeclaration: OCAST {
+    let propertyAttributesList: [OCPropertyAttribute]
+    let type: String
+    let name: String
+    init(propertyAttributesList: [OCPropertyAttribute], type: String, name: String) {
+        self.propertyAttributesList = propertyAttributesList
+        self.type = type
+        self.name = name
+    }
+}
+
+class OCPropertyAttribute: OCAST {
     let name: String
     init(name: String) {
         self.name = name
